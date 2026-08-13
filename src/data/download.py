@@ -10,36 +10,36 @@ RAW_DATA_DIR = ROOT_DIR / "data" / "raw"
 # Initial universe: Dow Jones 30
 # This allows us to first reproduce the paper's methodology.
 DOW_30_TICKERS = [
-    "MMM",
-    "AXP",
-    "AMGN",
-    "AMZN",
-    "AAPL",
-    "BA",
-    "CAT",
-    "CVX",
-    "CSCO",
-    "KO",
-    "DIS",
-    "GS",
-    "HD",
-    "HON",
-    "IBM",
-    "JNJ",
-    "JPM",
-    "MCD",
-    "MRK",
-    "MSFT",
-    "NKE",
-    "PG",
-    "CRM",
-    "TRV",
-    "UNH",
-    "VZ",
-    "V",
-    "WMT",
-    "DOW",
-    "INTC",
+    "MMM",   # 3M
+    "AXP",   # American Express
+    "AAPL",  # Apple
+    "BA",    # Boeing
+    "CAT",   # Caterpillar
+    "CVX",   # Chevron
+    "CSCO",  # Cisco
+    "KO",    # Coca-Cola
+    "DIS",   # Walt Disney
+    "DD",    # DuPont
+    "XOM",   # Exxon Mobil
+    "GE",    # General Electric
+    "GS",    # Goldman Sachs
+    "HD",    # Home Depot
+    "IBM",   # IBM
+    "INTC",  # Intel
+    "JNJ",   # Johnson & Johnson
+    "JPM",   # JPMorgan Chase
+    "MCD",   # McDonald's
+    "MRK",   # Merck
+    "MSFT",  # Microsoft
+    "NKE",   # Nike
+    "PFE",   # Pfizer
+    "PG",    # Procter & Gamble
+    "TRV",   # Travelers
+    "UTX",   # United Technologies
+    "UNH",   # UnitedHealth
+    "VZ",    # Verizon
+    "V",     # Visa
+    "WMT",   # Walmart
 ]
 
 START_DATE = "2009-01-01"
