@@ -1,0 +1,14 @@
+indicators:
+  macd:
+    fast_period: 12
+    slow_period: 26
+    signal_period: 9
+
+  rsi:
+    period: 14
+
+  cci:
+    period: 20
+
+  adx:
+    period: 14
