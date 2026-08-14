@@ -33,6 +33,55 @@ class TradingEnvironment:
             negative -> sell
             zero     -> hold
     """
+    def _calculate_turbulence(self):
+        """
+        Calculate the daily market turbulence index.
+
+        Turbulence is based on the Mahalanobis distance between
+        the current stock-return vector and historical average returns.
+        """
+
+        returns = self.prices[1:] / self.prices[:-1] - 1.0
+
+        turbulence = np.zeros(self.n_steps, dtype=np.float64)
+
+        for t in range(1, self.n_steps):
+            current_returns = returns[t - 1]
+
+            historical_returns = returns[:t]
+
+            if len(historical_returns) < 2:
+                turbulence[t] = 0.0
+                continue
+
+            mean_returns = np.mean(
+                historical_returns,
+                axis=0,
+            )
+
+            covariance = np.cov(
+                historical_returns,
+                rowvar=False,
+            )
+
+            # Numerical stability
+            covariance += np.eye(self.n_stocks) * 1e-6
+
+            diff = current_returns - mean_returns
+
+            try:
+                inv_covariance = np.linalg.pinv(covariance)
+
+                turbulence[t] = float(
+                    diff.T
+                    @ inv_covariance
+                    @ diff
+                )
+
+            except np.linalg.LinAlgError:
+                turbulence[t] = 0.0
+
+        return turbulence
 
     def __init__(
         self,
@@ -67,7 +116,7 @@ class TradingEnvironment:
         self.n_steps = len(self.dates)
 
         self._prepare_arrays()
-
+        self.turbulence = self._calculate_turbulence()
         self.reset()
 
     # ------------------------------------------------------------------
@@ -360,7 +409,7 @@ class TradingEnvironment:
             raise RuntimeError(
                 "Environment is done. Call reset()."
             )
-
+    
         # --------------------------------------------------------------
         # Current prices
         # --------------------------------------------------------------
