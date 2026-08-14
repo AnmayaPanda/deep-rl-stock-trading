@@ -4,22 +4,19 @@ import numpy as np
 import pandas as pd
 
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-FEATURES_PATH = ROOT_DIR / "data" / "processed" / "features.csv"
-
-
 class TradingEnvironment:
     """
-    Multi-stock trading environment.
+    Paper-faithful multi-stock trading environment.
 
-    Action:
-        -1 = SELL
-         0 = HOLD
-        +1 = BUY
+    Adaptation:
+        - Paper: 30 stocks
+        - This implementation: 29 stocks
+        - Initial capital: $1,000,000
+        - Transaction cost: 0.1%
 
     State:
         [cash,
-         prices,
+         adjusted_close_prices,
          holdings,
          MACD,
          RSI,
@@ -27,57 +24,136 @@ class TradingEnvironment:
          ADX]
 
     For 29 stocks:
-        state dimension = 1 + 29 * 6 = 175
+        1 + 29 * 6 = 175 dimensions
 
-    Timing convention:
-
-        Observe state at t
-            ↓
-        Choose action
-            ↓
-        Execute trade using prices at t
-            ↓
-        Move to t+1
-            ↓
-        Value portfolio using prices at t+1
-            ↓
-        reward = V(t+1) - V(t)
+    Action:
+        Continuous vector in [-1, 1].
+        Each value is converted into a number of shares.
+            positive -> buy
+            negative -> sell
+            zero     -> hold
     """
 
     def __init__(
         self,
-        data_path: Path = FEATURES_PATH,
-        initial_cash: float = 1_000_000.0,
-        transaction_cost: float = 0.001,
+        data_path="data/processed/features.csv",
+        initial_cash=1_000_000.0,
+        transaction_cost=0.001,
+        max_trade_shares=100,
+        turbulence_threshold=None,
     ):
         self.data_path = Path(data_path)
-        self.initial_cash = initial_cash
-        self.transaction_cost = transaction_cost
+
+        self.initial_cash = float(initial_cash)
+        self.transaction_cost_rate = float(transaction_cost)
+        self.max_trade_shares = int(max_trade_shares)
+
+        # Optional turbulence control.
+        # We will implement the paper's turbulence calculation
+        # separately before enabling this by default.
+        self.turbulence_threshold = turbulence_threshold
 
         self.data = pd.read_csv(self.data_path)
+        self.data["Date"] = pd.to_datetime(self.data["Date"])
 
-        self.data["Date"] = pd.to_datetime(
-            self.data["Date"]
-        )
+        self.data = self.data.sort_values(
+            ["Date", "Ticker"]
+        ).reset_index(drop=True)
 
-        self.tickers = sorted(
-            self.data["Ticker"].unique()
-        )
-
+        self.tickers = sorted(self.data["Ticker"].unique())
         self.n_stocks = len(self.tickers)
 
-        self.dates = sorted(
-            self.data["Date"].unique()
-        )
-
+        self.dates = sorted(self.data["Date"].unique())
         self.n_steps = len(self.dates)
 
-        self.price_data = self._build_price_matrix()
+        self._prepare_arrays()
 
-        self.indicator_data = (
-            self._build_indicator_matrices()
-        )
+        self.reset()
 
+    # ------------------------------------------------------------------
+    # DATA
+    # ------------------------------------------------------------------
+
+    def _prepare_arrays(self):
+        """
+        Convert the long-form feature dataset into aligned
+        date x stock arrays.
+        """
+
+        required_columns = [
+            "Date",
+            "Ticker",
+            "Close",
+            "MACD",
+            "RSI",
+            "CCI",
+            "ADX",
+        ]
+
+        missing = [
+            col for col in required_columns
+            if col not in self.data.columns
+        ]
+
+        if missing:
+            raise ValueError(
+                f"Missing required columns: {missing}"
+            )
+
+        price_df = self.data.pivot(
+            index="Date",
+            columns="Ticker",
+            values="Close",
+        ).reindex(columns=self.tickers)
+
+        macd_df = self.data.pivot(
+            index="Date",
+            columns="Ticker",
+            values="MACD",
+        ).reindex(columns=self.tickers)
+
+        rsi_df = self.data.pivot(
+            index="Date",
+            columns="Ticker",
+            values="RSI",
+        ).reindex(columns=self.tickers)
+
+        cci_df = self.data.pivot(
+            index="Date",
+            columns="Ticker",
+            values="CCI",
+        ).reindex(columns=self.tickers)
+
+        adx_df = self.data.pivot(
+            index="Date",
+            columns="Ticker",
+            values="ADX",
+        ).reindex(columns=self.tickers)
+
+        self.prices = price_df.to_numpy(dtype=np.float64)
+        self.macd = macd_df.to_numpy(dtype=np.float64)
+        self.rsi = rsi_df.to_numpy(dtype=np.float64)
+        self.cci = cci_df.to_numpy(dtype=np.float64)
+        self.adx = adx_df.to_numpy(dtype=np.float64)
+
+        if np.isnan(self.prices).any():
+            raise ValueError("Price data contains NaN values.")
+
+        if (
+            np.isnan(self.macd).any()
+            or np.isnan(self.rsi).any()
+            or np.isnan(self.cci).any()
+            or np.isnan(self.adx).any()
+        ):
+            raise ValueError(
+                "Technical indicators contain NaN values."
+            )
+
+    # ------------------------------------------------------------------
+    # RESET
+    # ------------------------------------------------------------------
+
+    def reset(self):
         self.current_step = 0
 
         self.cash = self.initial_cash
@@ -87,360 +163,324 @@ class TradingEnvironment:
             dtype=np.float64,
         )
 
-        self.portfolio_value = (
-            self.initial_cash
-        )
+        self.portfolio_value = self.initial_cash
 
-    def _build_price_matrix(self):
-        """Create Date × Stock close-price matrix."""
+        self.previous_portfolio_value = self.initial_cash
 
-        pivot = self.data.pivot(
-            index="Date",
-            columns="Ticker",
-            values="Close",
-        )
+        self.total_transaction_costs = 0.0
 
-        pivot = pivot.reindex(
-            index=self.dates,
-            columns=self.tickers,
-        )
+        self.done = False
 
-        return pivot.to_numpy(
-            dtype=np.float64
-        )
+        return self._get_state()
 
-    def _build_indicator_matrices(self):
-        """Create Date × Stock indicator matrices."""
-
-        indicators = {}
-
-        for indicator in [
-            "MACD",
-            "RSI",
-            "CCI",
-            "ADX",
-        ]:
-            pivot = self.data.pivot(
-                index="Date",
-                columns="Ticker",
-                values=indicator,
-            )
-
-            pivot = pivot.reindex(
-                index=self.dates,
-                columns=self.tickers,
-            )
-
-            indicators[indicator] = pivot.to_numpy(
-                dtype=np.float64
-            )
-
-        return indicators
-
-    def _get_prices(self, step=None):
-        """Get prices for a timestep."""
-
-        if step is None:
-            step = self.current_step
-
-        return self.price_data[step]
+    # ------------------------------------------------------------------
+    # STATE
+    # ------------------------------------------------------------------
 
     def _get_state(self):
-        """Construct the current 175-dimensional state."""
+        """
+        Paper state:
 
-        prices = self._get_prices()
-
-        macd = self.indicator_data["MACD"][
-            self.current_step
-        ]
-
-        rsi = self.indicator_data["RSI"][
-            self.current_step
-        ]
-
-        cci = self.indicator_data["CCI"][
-            self.current_step
-        ]
-
-        adx = self.indicator_data["ADX"][
-            self.current_step
-        ]
+        [cash,
+         prices,
+         holdings,
+         MACD,
+         RSI,
+         CCI,
+         ADX]
+        """
 
         state = np.concatenate(
             [
-                np.array([self.cash]),
-                prices,
+                np.array([self.cash], dtype=np.float64),
+
+                self.prices[self.current_step],
+
                 self.holdings,
-                macd,
-                rsi,
-                cci,
-                adx,
+
+                self.macd[self.current_step],
+
+                self.rsi[self.current_step],
+
+                self.cci[self.current_step],
+
+                self.adx[self.current_step],
             ]
         )
 
         return state.astype(np.float32)
 
-    def _calculate_portfolio_value(self, step=None):
-        """Calculate portfolio value using prices at step."""
+    # ------------------------------------------------------------------
+    # PORTFOLIO
+    # ------------------------------------------------------------------
 
-        prices = self._get_prices(step)
+    def _calculate_portfolio_value(self, prices=None):
+        if prices is None:
+            prices = self.prices[self.current_step]
 
-        stock_value = np.sum(
-            self.holdings * prices
+        return float(
+            self.cash + np.dot(prices, self.holdings)
         )
 
-        return self.cash + stock_value
+    # ------------------------------------------------------------------
+    # ACTION CONVERSION
+    # ------------------------------------------------------------------
 
-    def reset(self):
-        """Reset the environment."""
-
-        self.current_step = 0
-
-        self.cash = self.initial_cash
-
-        self.holdings = np.zeros(
-            self.n_stocks,
-            dtype=np.float64,
-        )
-
-        self.portfolio_value = (
-            self.initial_cash
-        )
-
-        return self._get_state()
-
-    def _sell(self, indices, prices):
-        """Sell holdings for selected stocks."""
-
-        transaction_costs = 0.0
-
-        for i in indices:
-
-            if self.holdings[i] <= 0:
-                continue
-
-            shares = self.holdings[i]
-
-            gross_value = (
-                shares * prices[i]
-            )
-
-            cost = (
-                gross_value
-                * self.transaction_cost
-            )
-
-            self.cash += (
-                gross_value - cost
-            )
-
-            self.holdings[i] = 0.0
-
-            transaction_costs += cost
-
-        return transaction_costs
-
-    def _buy(self, indices, prices):
+    def _action_to_shares(self, action):
         """
-        Buy selected stocks.
+        Convert continuous [-1, 1] actions into share quantities.
 
-        Available cash is divided equally among
-        all stocks receiving a BUY action.
+        Example:
+
+            action =  1.0 -> +max_trade_shares
+            action =  0.5 -> +50% of max_trade_shares
+            action =  0.0 -> 0 shares
+            action = -0.5 -> -50% of max_trade_shares
+            action = -1.0 -> -max_trade_shares
         """
 
-        if len(indices) == 0:
-            return 0.0
+        action = np.asarray(action, dtype=np.float64)
 
-        transaction_costs = 0.0
-
-        cash_per_stock = (
-            self.cash / len(indices)
-        )
-
-        for i in indices:
-
-            if prices[i] <= 0:
-                continue
-
-            shares = (
-                cash_per_stock
-                / (
-                    prices[i]
-                    * (1 + self.transaction_cost)
-                )
-            )
-
-            gross_value = (
-                shares * prices[i]
-            )
-
-            cost = (
-                gross_value
-                * self.transaction_cost
-            )
-
-            total_cost = (
-                gross_value + cost
-            )
-
-            if total_cost > self.cash:
-
-                shares = (
-                    self.cash
-                    / (
-                        prices[i]
-                        * (1 + self.transaction_cost)
-                    )
-                )
-
-                gross_value = (
-                    shares * prices[i]
-                )
-
-                cost = (
-                    gross_value
-                    * self.transaction_cost
-                )
-
-                total_cost = (
-                    gross_value + cost
-                )
-
-            self.holdings[i] += shares
-
-            self.cash -= total_cost
-
-            transaction_costs += cost
-
-        return transaction_costs
-
-    def step(self, actions):
-        """
-        Execute one trading step.
-
-        The action is selected using state t.
-
-        Trades are executed at prices from t.
-
-        The environment then advances to t+1.
-
-        Reward is based on the change in portfolio
-        value from t to t+1.
-        """
-
-        actions = np.asarray(
-            actions,
-            dtype=np.int8,
-        )
-
-        if actions.shape != (
-            self.n_stocks,
-        ):
+        if action.shape != (self.n_stocks,):
             raise ValueError(
-                f"Expected {self.n_stocks} actions, "
-                f"got shape {actions.shape}."
+                f"Expected action shape "
+                f"({self.n_stocks},), "
+                f"got {action.shape}"
             )
 
-        if not np.isin(
-            actions,
-            [-1, 0, 1],
-        ).all():
-            raise ValueError(
-                "Actions must contain only "
-                "-1, 0, or 1."
+        action = np.clip(action, -1.0, 1.0)
+
+        shares = np.floor(
+            action * self.max_trade_shares
+        ).astype(np.int64)
+
+        return shares
+
+    # ------------------------------------------------------------------
+    # EXECUTE SELL
+    # ------------------------------------------------------------------
+
+    def _execute_sell(self, stock_idx, shares, price):
+        """
+        Sell shares while respecting current holdings.
+        """
+
+        shares = min(
+            int(abs(shares)),
+            int(self.holdings[stock_idx]),
+        )
+
+        if shares <= 0:
+            return 0.0, 0.0
+
+        gross_value = shares * price
+
+        transaction_cost = (
+            gross_value * self.transaction_cost_rate
+        )
+
+        net_proceeds = gross_value - transaction_cost
+
+        self.cash += net_proceeds
+
+        self.holdings[stock_idx] -= shares
+
+        return net_proceeds, transaction_cost
+
+    # ------------------------------------------------------------------
+    # EXECUTE BUY
+    # ------------------------------------------------------------------
+
+    def _execute_buy(self, stock_idx, shares, price):
+        """
+        Buy as many requested shares as possible while
+        maintaining non-negative cash.
+        """
+
+        shares = int(max(shares, 0))
+
+        if shares <= 0:
+            return 0.0, 0.0
+
+        total_cost_per_share = (
+            price * (1.0 + self.transaction_cost_rate)
+        )
+
+        affordable_shares = int(
+            self.cash // total_cost_per_share
+        )
+
+        shares = min(
+            shares,
+            affordable_shares,
+        )
+
+        if shares <= 0:
+            return 0.0, 0.0
+
+        gross_value = shares * price
+
+        transaction_cost = (
+            gross_value * self.transaction_cost_rate
+        )
+
+        total_cost = gross_value + transaction_cost
+
+        self.cash -= total_cost
+
+        self.holdings[stock_idx] += shares
+
+        return total_cost, transaction_cost
+
+    # ------------------------------------------------------------------
+    # STEP
+    # ------------------------------------------------------------------
+
+    def step(self, action):
+        """
+        Execute action at time t.
+
+        Prices then move to t+1.
+
+        Reward:
+
+            r_t = V_{t+1} - V_t
+
+        with transaction costs incorporated into the
+        portfolio balance.
+
+        Returns:
+            next_state
+            reward
+            done
+            info
+        """
+
+        if self.done:
+            raise RuntimeError(
+                "Environment is done. Call reset()."
             )
 
-        # ---------------------------------------------
-        # Prices available when action is selected
-        # ---------------------------------------------
+        # --------------------------------------------------------------
+        # Current prices
+        # --------------------------------------------------------------
 
-        current_prices = self._get_prices()
+        current_prices = self.prices[self.current_step]
 
+        # Portfolio value before action.
         old_portfolio_value = (
-            self._calculate_portfolio_value()
+            self.cash
+            + np.dot(current_prices, self.holdings)
         )
+
+        # --------------------------------------------------------------
+        # Convert continuous actions to share quantities
+        # --------------------------------------------------------------
+
+        requested_shares = self._action_to_shares(action)
 
         transaction_costs = 0.0
 
-        # ---------------------------------------------
-        # SELL
-        # ---------------------------------------------
+        # --------------------------------------------------------------
+        # SELL FIRST
+        # --------------------------------------------------------------
 
-        sell_indices = np.where(
-            actions == -1
-        )[0]
+        for i in range(self.n_stocks):
 
-        transaction_costs += self._sell(
-            sell_indices,
-            current_prices,
-        )
+            if requested_shares[i] < 0:
 
-        # ---------------------------------------------
+                _, cost = self._execute_sell(
+                    stock_idx=i,
+                    shares=requested_shares[i],
+                    price=current_prices[i],
+                )
+
+                transaction_costs += cost
+
+        # --------------------------------------------------------------
         # BUY
-        # ---------------------------------------------
+        # --------------------------------------------------------------
 
-        buy_indices = np.where(
-            actions == 1
-        )[0]
+        for i in range(self.n_stocks):
 
-        transaction_costs += self._buy(
-            buy_indices,
-            current_prices,
-        )
+            if requested_shares[i] > 0:
 
-        # ---------------------------------------------
-        # Move forward one trading day
-        # ---------------------------------------------
+                _, cost = self._execute_buy(
+                    stock_idx=i,
+                    shares=requested_shares[i],
+                    price=current_prices[i],
+                )
+
+                transaction_costs += cost
+
+        # --------------------------------------------------------------
+        # Advance time
+        # --------------------------------------------------------------
 
         self.current_step += 1
 
-        done = (
-            self.current_step
-            >= self.n_steps - 1
-        )
+        if self.current_step >= self.n_steps - 1:
 
-        next_prices = self._get_prices()
+            self.current_step = self.n_steps - 1
+
+            self.done = True
+
+        next_prices = self.prices[self.current_step]
+
+        # --------------------------------------------------------------
+        # New portfolio value
+        # --------------------------------------------------------------
 
         new_portfolio_value = (
-            self._calculate_portfolio_value()
+            self.cash
+            + np.dot(next_prices, self.holdings)
         )
 
-        # ---------------------------------------------
+        # --------------------------------------------------------------
         # Reward
-        # ---------------------------------------------
+        # --------------------------------------------------------------
 
         reward = (
             new_portfolio_value
             - old_portfolio_value
         )
 
+        # --------------------------------------------------------------
+        # Update bookkeeping
+        # --------------------------------------------------------------
+
+        self.previous_portfolio_value = (
+            old_portfolio_value
+        )
+
         self.portfolio_value = (
             new_portfolio_value
         )
 
-        next_state = self._get_state()
+        self.total_transaction_costs += (
+            transaction_costs
+        )
 
         info = {
-            "date": self.dates[
-                self.current_step
-            ],
-            "portfolio_value": (
+            "date": self.dates[self.current_step],
+            "cash": float(self.cash),
+            "portfolio_value": float(
                 self.portfolio_value
             ),
-            "cash": self.cash,
-            "transaction_costs": (
+            "reward": float(reward),
+            "transaction_costs": float(
                 transaction_costs
             ),
-            "previous_portfolio_value": (
-                old_portfolio_value
+            "total_transaction_costs": float(
+                self.total_transaction_costs
             ),
-            "current_prices": current_prices.copy(),
-            "next_prices": next_prices.copy(),
+            "holdings": self.holdings.copy(),
+            "requested_shares": requested_shares.copy(),
         }
 
         return (
-            next_state,
+            self._get_state(),
             float(reward),
-            done,
+            self.done,
             info,
         )
