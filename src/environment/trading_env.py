@@ -89,7 +89,7 @@ class TradingEnvironment:
         initial_cash=1_000_000.0,
         transaction_cost=0.001,
         max_trade_shares=100,
-        turbulence_threshold=None,
+        turbulence_threshold=71.10,
     ):
         self.data_path = Path(data_path)
 
@@ -428,6 +428,16 @@ class TradingEnvironment:
 
         requested_shares = self._action_to_shares(action)
 
+        current_turbulence = self.turbulence[self.current_step]
+        risk_off = (
+            self.turbulence_threshold is not None
+            and current_turbulence > self.turbulence_threshold
+        )
+
+        if risk_off:
+            # High turbulence: liquidate all existing positions
+            requested_shares = -self.holdings.astype(np.int64)
+
         transaction_costs = 0.0
 
         # --------------------------------------------------------------
@@ -511,7 +521,15 @@ class TradingEnvironment:
         )
 
         info = {
+            "decision_date": self.dates[self.current_step - 1],
             "date": self.dates[self.current_step],
+            "turbulence": float(current_turbulence),
+            "turbulence_threshold": (
+                float(self.turbulence_threshold)
+                if self.turbulence_threshold is not None
+                else None
+            ),
+            "risk_off": bool(risk_off),
             "cash": float(self.cash),
             "portfolio_value": float(
                 self.portfolio_value
@@ -533,3 +551,4 @@ class TradingEnvironment:
             self.done,
             info,
         )
+    
