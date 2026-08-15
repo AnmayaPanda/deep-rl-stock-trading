@@ -9,7 +9,10 @@ def train(
     max_steps=None,
     batch_size=32,
 ):
-    env = TradingEnvironment()
+    env = TradingEnvironment(
+        start_date="2009-01-01",
+        end_date="2015-09-30",
+    )
 
     agent = DDPGAgent(
         state_dim=175,
@@ -148,13 +151,13 @@ if __name__ == "__main__":
 
     env, agent = train(
         episodes=1,
-        max_steps=500,
+        max_steps=None,
         batch_size=32,
     )
 
     agent.save(
-        "ddpg_smoke_test.pt"
+        "ddpg_train_2009_2015.pt"
     )
 
     print()
-    print("Model saved: ddpg_smoke_test.pt")
+    print("Model saved: ddpg_train_2009_2015.pt")
