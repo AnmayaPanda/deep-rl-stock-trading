@@ -1,7 +1,7 @@
 import numpy as np
 
 from src.agents.ddpg_agent import DDPGAgent
-from src.environment.trading_env import TradingEnvironment
+from src.environment.trading_env_normalized import TradingEnvironment
 
 
 def train(
@@ -157,8 +157,8 @@ if __name__ == "__main__":
     )
 
     agent.save(
-        "ddpg_train_2009_2015_turbulence.pt"
+        "ddpg_train_2009_2015_normalized.pt"
     )
 
     print()
-    print("Model saved: ddpg_train_2009_2015_turbulence.pt")
+    print("Model saved: ddpg_train_2009_2015_normalized.pt")
