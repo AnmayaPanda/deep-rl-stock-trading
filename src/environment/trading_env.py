@@ -89,7 +89,9 @@ class TradingEnvironment:
         initial_cash=1_000_000.0,
         transaction_cost=0.001,
         max_trade_shares=100,
-        turbulence_threshold=71.10,
+        turbulence_threshold=None,
+        start_date=None,
+        end_date=None,
     ):
         self.data_path = Path(data_path)
 
@@ -104,7 +106,22 @@ class TradingEnvironment:
 
         self.data = pd.read_csv(self.data_path)
         self.data["Date"] = pd.to_datetime(self.data["Date"])
+        if start_date is not None:
+            start_date = pd.Timestamp(start_date)
+            self.data = self.data[
+                self.data["Date"] >= start_date
+            ]
 
+        if end_date is not None:
+            end_date = pd.Timestamp(end_date)
+            self.data = self.data[
+                self.data["Date"] <= end_date
+            ]
+
+        if self.data.empty:
+            raise ValueError(
+                "No data remains after applying the date range."
+            )
         self.data = self.data.sort_values(
             ["Date", "Ticker"]
         ).reset_index(drop=True)
