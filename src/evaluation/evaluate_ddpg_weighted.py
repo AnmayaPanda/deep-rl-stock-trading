@@ -24,7 +24,7 @@ def evaluate():
         batch_size=32,
     )
 
-    agent.load("ddpg_train_2009_2015_normalized.pt")
+    agent.load("ddpg_train_2009_2015_weighted.pt")
 
     # --------------------------------------------------------------
     # Evaluation

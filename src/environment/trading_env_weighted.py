@@ -98,7 +98,13 @@ class TradingEnvironment:
         self.initial_cash = float(initial_cash)
         self.transaction_cost_rate = float(transaction_cost)
         self.max_trade_shares = int(max_trade_shares)
-
+        # State normalization scales.
+        self.cash_scale = self.initial_cash
+        self.price_scale = 100.0
+        self.holding_scale = self.max_trade_shares
+        self.macd_scale = 100.0
+        self.cci_scale = 100.0
+        self.adx_scale = 100.0
         # Optional turbulence control.
         # We will implement the paper's turbulence calculation
         # separately before enabling this by default.
@@ -133,6 +139,8 @@ class TradingEnvironment:
         self.n_steps = len(self.dates)
 
         self._prepare_arrays()
+        # Reference prices for relative-price representation.
+        self.initial_prices = self.prices[0].copy()
         self.turbulence = self._calculate_turbulence()
         self.reset()
 
@@ -245,32 +253,112 @@ class TradingEnvironment:
 
     def _get_state(self):
         """
-        Paper state:
+        Normalized state representation:
 
-        [cash,
-         prices,
-         holdings,
-         MACD,
-         RSI,
-         CCI,
-         ADX]
+            [cash_weight,
+            relative_prices,
+            portfolio_weights,
+            normalized_MACD,
+            normalized_RSI,
+            normalized_CCI,
+            normalized_ADX]
+
+        For 29 stocks:
+            1 + 29 * 6 = 175 dimensions
         """
+
+        current_prices = self.prices[self.current_step]
+
+        # --------------------------------------------------------------
+        # Portfolio value
+        # --------------------------------------------------------------
+
+        portfolio_value = (
+            self.cash
+            + np.dot(current_prices, self.holdings)
+        )
+
+        portfolio_value = max(portfolio_value, 1e-8)
+
+        # --------------------------------------------------------------
+        # 1. Cash weight
+        # --------------------------------------------------------------
+
+        cash_weight = self.cash / portfolio_value
+
+        # --------------------------------------------------------------
+        # 2. Relative prices
+        # --------------------------------------------------------------
+
+        relative_prices = (
+            current_prices / self.initial_prices
+        )
+
+        # --------------------------------------------------------------
+        # 3. Portfolio weights
+        # --------------------------------------------------------------
+
+        position_values = (
+            current_prices * self.holdings
+        )
+
+        portfolio_weights = (
+            position_values / portfolio_value
+        )
+
+        # --------------------------------------------------------------
+        # 4. MACD
+        # --------------------------------------------------------------
+
+        normalized_macd = (
+            self.macd[self.current_step] / 100.0
+        )
+
+        # --------------------------------------------------------------
+        # 5. RSI
+        # --------------------------------------------------------------
+
+        normalized_rsi = (
+            self.rsi[self.current_step] / 100.0
+        )
+
+        # --------------------------------------------------------------
+        # 6. CCI
+        # --------------------------------------------------------------
+
+        normalized_cci = np.clip(
+            self.cci[self.current_step] / 200.0,
+            -1.0,
+            1.0,
+        )
+
+        # --------------------------------------------------------------
+        # 7. ADX
+        # --------------------------------------------------------------
+
+        normalized_adx = (
+            self.adx[self.current_step] / 100.0
+        )
+
+        # --------------------------------------------------------------
+        # Construct state
+        # --------------------------------------------------------------
 
         state = np.concatenate(
             [
-                np.array([self.cash], dtype=np.float64),
+                np.array([cash_weight], dtype=np.float64),
 
-                self.prices[self.current_step],
+                relative_prices,
 
-                self.holdings,
+                portfolio_weights,
 
-                self.macd[self.current_step],
+                normalized_macd,
 
-                self.rsi[self.current_step],
+                normalized_rsi,
 
-                self.cci[self.current_step],
+                normalized_cci,
 
-                self.adx[self.current_step],
+                normalized_adx,
             ]
         )
 
@@ -325,11 +413,33 @@ class TradingEnvironment:
         # Convert actions to non-negative preference scores
         # --------------------------------------------------------------
 
+        # --------------------------------------------------------------
+        # Convert actions into non-negative preference scores
+        # --------------------------------------------------------------
+
+        # If every action is -1, the agent is explicitly
+        # requesting zero equity exposure.
+        if np.all(action <= -0.999999):
+
+            return np.zeros(
+                self.n_stocks,
+                dtype=np.int64,
+            )
+
         scores = action + 1.0
 
-        # Avoid a completely zero portfolio.
+        # Numerical safety
+        scores = np.maximum(
+            scores,
+            0.0,
+        )
+
         if scores.sum() <= 1e-8:
-            scores = np.ones(self.n_stocks)
+
+            return np.zeros(
+                self.n_stocks,
+                dtype=np.int64,
+            )
 
         # --------------------------------------------------------------
         # Convert scores into portfolio weights
@@ -495,7 +605,6 @@ class TradingEnvironment:
         # Convert continuous actions to share quantities
         # --------------------------------------------------------------
 
-        requested_shares = self._action_to_shares(action)
         target_shares = self._action_to_shares(action)
 
         requested_shares = (
