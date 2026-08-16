@@ -5,7 +5,7 @@ from src.environment.trading_env_weighted import TradingEnvironment
 
 
 def train(
-    episodes=10,
+    episodes=50,
     max_steps=None,
     batch_size=32,
 ):
@@ -151,14 +151,14 @@ def train(
 if __name__ == "__main__":
 
     env, agent = train(
-        episodes=10,
+        episodes=50,
         max_steps=None,
         batch_size=32,
     )
 
     agent.save(
-        "ddpg_train_2009_2015_weighted_10ep_no_turbulence.pt"
+        "ddpg_train_2009_2015_weighted_50ep_layernorm_no_turbulence.pt"
     )
 
     print()
-    print("Model saved: ddpg_train_2009_2015_weighted_10ep_no_turbulence.pt")
+    print("Model saved: ddpg_train_2009_2015_weighted_50ep_layernorm_no_turbulence.pt")

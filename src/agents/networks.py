@@ -3,15 +3,6 @@ import torch.nn as nn
 
 
 class Actor(nn.Module):
-    """
-    Actor network.
-
-    State:
-        175 dimensions
-
-    Action:
-        29 continuous values in [-1, 1]
-    """
 
     def __init__(
         self,
@@ -23,9 +14,11 @@ class Actor(nn.Module):
 
         self.network = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.ReLU(),
 
             nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.ReLU(),
 
             nn.Linear(hidden_dim, action_dim),
@@ -37,15 +30,6 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    """
-    Critic network.
-
-    Input:
-        state + action
-
-    Output:
-        Q-value
-    """
 
     def __init__(
         self,
@@ -62,13 +46,23 @@ class Critic(nn.Module):
             ),
             nn.ReLU(),
 
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(
+                hidden_dim,
+                hidden_dim,
+            ),
             nn.ReLU(),
 
-            nn.Linear(hidden_dim, 1),
+            nn.Linear(
+                hidden_dim,
+                1,
+            ),
         )
 
     def forward(self, state, action):
-        x = torch.cat([state, action], dim=1)
+
+        x = torch.cat(
+            [state, action],
+            dim=1,
+        )
 
         return self.network(x)
